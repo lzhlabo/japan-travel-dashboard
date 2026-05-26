@@ -22,8 +22,8 @@ _SUBTEXT = "#a0a0b0"
 _CITY_EMOJI = {"東京": "🗼", "大阪": "🏯", "福岡": "🌸", "札幌": "❄️", "沖繩": "🌺"}
 
 def _tci_color(score: float) -> str:
-    if score >= 70: return "#2ecc71"
-    elif score >= 40: return "#f39c12"
+    if score >= 80: return "#2ecc71"
+    elif score >= 60: return "#f39c12"
     else: return "#e74c3c"
 
 def _base_layout(title: str) -> dict:
@@ -497,9 +497,9 @@ def _build_city_tab_content(
     <p class="desc" id="tci-desc-{tab_idx}">TCI = 舒適度分數（<span class="desc-comfort-pct">50%</span>）＋ 票價分數（<span class="desc-fare-pct">40%</span>）＋ 匯率分數（<span class="desc-rate-pct">10%</span>）。<br>
       標示 <strong>~</strong> 的月份票價為<span style="color:#f39c12">估算票價</span>（以同月份其他目的地平均補值）；
       標示 <strong>*</strong> 的月份無票價資料，TCI 分數區間：
-      <span style="color:#2ecc71">■</span> ≥70 優秀 &nbsp;
-      <span style="color:#f39c12">■</span> 40–69 普通 &nbsp;
-      <span style="color:#e74c3c">■</span> &lt;40 較差</p>
+      <span style="color:#2ecc71">■</span> ≥80 優秀 &nbsp;
+      <span style="color:#f39c12">■</span> 60–79 普通 &nbsp;
+      <span style="color:#e74c3c">■</span> &lt;60 較差</p>
     <div class="chart-wrap">{tci_div}</div>
     <table class="tci-table">
       <thead><tr>
@@ -518,9 +518,9 @@ def _build_city_tab_content(
     <p class="desc" id="comfort-desc-{tab_idx}">
       藍色長條為降雨機率（%），紅色折線為人潮指數（1–10），橙色虛線為平均氣溫（°C）。<br>
       舒適度分數 = 氣溫（<span class="desc-temp-pct">40%</span>）+ 降雨（<span class="desc-rain-pct">30%</span>）+ 人潮（<span class="desc-crowd-pct">30%</span>）。<br>
-      氣溫：10–25°C 滿分；低於 10°C 每度扣 2 分，0°C 以下每度扣 3 分；高於 25°C 每度扣 3 分，30°C 以上每度扣 5 分。<br>
+      氣溫：採非線性舒適度曲線（非線性懲罰），18–22°C 為最佳舒適區間，過冷與過熱皆會快速降低舒適度分數。<br>
       降雨：降雨機率越高，舒適度越低。<br>
-      <strong>人潮：</strong>指數 1–5 輕微扣分，6–7 中度扣分，8–10 重度扣分（二次曲線）。
+      人潮：依人潮指數評估壅擠程度，人潮越高舒適度越低，並採分段非線性方式加重高人潮月份的扣分。
     </p>
     <div class="chart-wrap">{comfort_div}</div>
   </section>
@@ -943,8 +943,8 @@ function pct(v) {{ return Math.round(v * 100) + '%'; }}
 
 // ── TCI 顏色 ──────────────────────────────────────────────────────────────
 function tciColor(score) {{
-  if (score >= 70) return '#2ecc71';
-  if (score >= 40) return '#f39c12';
+  if (score >= 80) return '#2ecc71';
+  if (score >= 60) return '#f39c12';
   return '#e74c3c';
 }}
 

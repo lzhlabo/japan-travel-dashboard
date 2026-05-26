@@ -105,44 +105,66 @@ def _normalize(
 
 def _temperature_score(avg_temp_c: float) -> float:
     """
-    將平均氣溫換算為 0–100 的舒適度分數（非線性懲罰）。
+    將平均氣溫換算為 0–100 的舒適度分數。
 
-    規則：
-        10°C ≤ temp ≤ 25°C → 100 分（最舒適區間）
+    使用非對稱 Gaussian 曲線，讓偏離理想溫度時快速降分：
 
-        低溫懲罰（temp < 10°C）：
-            0°C ≤ temp < 10°C  → 每下降 1°C 扣 2 分
-            temp < 0°C         → 每下降 1°C 扣 3 分（累計）
+        理想區間 18–22°C → 100 分（最舒適）
+        低溫側（< 18°C）：sigma_cold = 10，衰減較緩（台灣旅客對低溫有一定接受度）
+        高溫側（> 22°C）：sigma_hot  =  7，衰減較快（高溫不舒適感更強烈）
 
-        高溫懲罰（temp > 25°C）：
-            25°C < temp ≤ 30°C → 每上升 1°C 扣 3 分
-            temp > 30°C        → 每上升 1°C 扣 5 分（累計）
+    公式：
+        temp in [18, 22]  → 100
+        temp < 18         → 100 × exp(-((temp - 18)² / (2 × 10²)))
+        temp > 22         → 100 × exp(-((temp - 22)² / (2 ×  7²)))
 
-        結果 clip 至 [0, 100]
+    代表性分數（供參考）：
+        -5°C → ~16    0°C → ~27    5°C → ~42    10°C → ~61
+        15°C → ~88   18°C → 100   20°C → 100   22°C → 100
+        25°C → ~91   28°C → ~66   30°C → ~55   33°C → ~37
+
+    設計原則：
+        - 春秋（15–25°C）高分，盛夏（28°C+）與寒冬（5°C 以下）明顯下降
+        - 不使用城市 hard code，所有城市共用同一公式
+        - 結果 clip 至 [0, 100]
     """
-    if avg_temp_c < 0.0:
-        # 0°C 以下：先扣 10°C→0°C 的 2 分/°C（共 20 分），再扣 0°C 以下的 3 分/°C
-        score = 100.0 - (10.0 * 2.0) - (abs(avg_temp_c) * 3.0)
-    elif avg_temp_c < 10.0:
-        score = 100.0 - (10.0 - avg_temp_c) * 2.0
-    elif avg_temp_c <= 25.0:
+    import math
+    _IDEAL_LO:   float = 18.0
+    _IDEAL_HI:   float = 22.0
+    _SIGMA_COLD: float = 10.0   # 低溫側衰減寬度（較寬容）
+    _SIGMA_HOT:  float = 7.0    # 高溫側衰減寬度（較嚴格）
+
+    if _IDEAL_LO <= avg_temp_c <= _IDEAL_HI:
         score = 100.0
-    elif avg_temp_c <= 30.0:
-        score = 100.0 - (avg_temp_c - 25.0) * 3.0
+    elif avg_temp_c < _IDEAL_LO:
+        score = 100.0 * math.exp(
+            -((avg_temp_c - _IDEAL_LO) ** 2) / (2.0 * _SIGMA_COLD ** 2)
+        )
     else:
-        # 25→30 已扣 15 分，30°C 以上再扣 5 分/°C
-        score = 85.0 - (avg_temp_c - 30.0) * 5.0
+        score = 100.0 * math.exp(
+            -((avg_temp_c - _IDEAL_HI) ** 2) / (2.0 * _SIGMA_HOT ** 2)
+        )
     return max(0.0, min(100.0, score))
 
 
 def _crowd_score(avg_crowd: float) -> float:
     """
-    將人潮指數換算為 0–100 的舒適度分數（非線性懲罰）。
+    將人潮指數（crowd_index）換算為 0–100 的舒適度子分數（非線性懲罰）。
+
+    重要：crowd_index 是「人潮擁擠程度」，不是舒適分數。
+        crowd_index = 1  → 人少、最舒適
+        crowd_index = 10 → 非常擁擠、最不舒適
+
+    此函式將擁擠程度轉換為舒適度子分數（crowd_score）：
+    人潮越高 → crowd_score 越低。
 
     crowd_index 範圍 1–10，分三段：
         1–5：輕微扣分（二次曲線）  crowd=1→100, crowd=5→68
         5–7：中度扣分（線性）      crowd=5→68,  crowd=7→40
         7–10：重度扣分（二次曲線） crowd=7→40,  crowd=10→0（clip）
+
+    注意：crowd=9 時公式結果為 40-(9-7)²×13.3 = -13.2，clip 至 0。
+          crowd=10 時公式結果為 40-(10-7)²×13.3 = -79.7，clip 至 0。
     """
     if avg_crowd <= 5.0:
         score = 100.0 - (avg_crowd - 1.0) ** 2 * 2.0

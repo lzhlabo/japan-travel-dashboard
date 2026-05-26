@@ -55,6 +55,17 @@ _COMFORT_REQUIRED_COLS: list[str] = [
     "crowd_index",
 ]
 
+# comfort_scores.csv 在加入 year 欄位後的新格式必要欄位
+# year 欄位為選填（向後相容舊格式）
+_COMFORT_REQUIRED_COLS_NEW: list[str] = [
+    "year",
+    "month",
+    "city",
+    "avg_temp_c",
+    "rain_probability_pct",
+    "crowd_index",
+]
+
 
 # ---------------------------------------------------------------------------
 # 內部輔助函式
@@ -239,6 +250,12 @@ def load_exchange_rates(path: str | Path) -> list[ExchangeRateRecord]:
 def load_comfort_scores(path: str | Path) -> list[ComfortScoreRecord]:
     """
     載入 comfort_scores.csv 並回傳有效的 ComfortScoreRecord 清單。
+
+    支援兩種格式：
+    - 舊格式（向後相容）：month, city, avg_temp_c, rain_probability_pct, crowd_index
+    - 新格式（--update-data 產生）：year, month, city, avg_temp_c, rain_probability_pct, crowd_index
+
+    year 欄位為選填，若存在則讀取但不影響分析邏輯。
 
     Parameters
     ----------

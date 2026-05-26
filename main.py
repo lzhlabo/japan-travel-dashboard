@@ -6,6 +6,7 @@ Entry point.
 Usage
 -----
     python main.py
+    python main.py --update-data
     python main.py --data-dir my_data --output my_output/report.html
     python main.py --help
 
@@ -19,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 
 
@@ -44,6 +46,16 @@ def parse_args() -> argparse.Namespace:
         metavar="OUTPUT",
         help="HTML Dashboard 輸出路徑",
     )
+    parser.add_argument(
+        "--update-data",
+        action="store_true",
+        help=(
+            "自動抓取上一個完整年度的匯率與氣候資料，"
+            "覆蓋 exchange_rates.csv 與 comfort_scores.csv，"
+            "然後執行分析並輸出 Dashboard。"
+            "（fares.csv 不會被覆蓋，請手動更新）"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -52,13 +64,131 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 def _done(stage: str) -> None:
-    """輸出階段完成訊息至 stdout。"""
-    print(f"[完成] {stage}")
+    print(f"[INFO] {stage}")
 
 
 def _error(reason: str) -> None:
-    """輸出錯誤訊息至 stderr。"""
-    print(f"[錯誤] {reason}", file=sys.stderr)
+    print(f"[ERROR] {reason}", file=sys.stderr)
+
+
+def _info(msg: str) -> None:
+    print(f"[INFO] {msg}")
+
+
+# ---------------------------------------------------------------------------
+# 資料更新流程
+# ---------------------------------------------------------------------------
+
+def _get_last_complete_year() -> int:
+    """
+    自動判斷上一個完整年度。
+
+    例如：目前是 2026 年 → 回傳 2025
+          目前是 2027 年 → 回傳 2026
+    """
+    return date.today().year - 1
+
+
+def run_update_data(data_dir: Path) -> bool:
+    """
+    執行資料更新流程：
+    1. 自動判斷上一個完整年度
+    2. 抓取匯率資料（臺灣銀行）→ 覆蓋 exchange_rates.csv
+    3. 抓取氣候資料（JMA）→ 覆蓋 comfort_scores.csv
+    4. 不覆蓋 fares.csv
+
+    Parameters
+    ----------
+    data_dir : Path
+        資料目錄路徑。
+
+    Returns
+    -------
+    bool
+        True = 更新成功（或部分成功，可繼續分析）
+        False = 更新失敗且無既有 CSV 可用（應停止程式）
+    """
+    target_year = _get_last_complete_year()
+    _info(f"Target year: {target_year} (current year: {date.today().year})")
+
+    try:
+        from src.fetcher import FetchError, fetch_exchange_rates, fetch_comfort_scores
+    except ImportError as exc:
+        _error(f"fetcher module import failed: {exc}")
+        return _check_existing_csvs(data_dir)
+
+    # ------------------------------------------------------------------
+    # 更新匯率資料
+    # ------------------------------------------------------------------
+    exchange_path = data_dir / "exchange_rates.csv"
+
+    try:
+        rate_df = fetch_exchange_rates(target_year)
+        rate_df.to_csv(exchange_path, index=False, encoding="utf-8")
+        _done(f"Exchange rates written: {len(rate_df)} records → {exchange_path}")
+    except FetchError as exc:
+        print(f"[WARNING] Exchange rate fetch failed: {exc}", file=sys.stderr)
+        if exchange_path.exists():
+            print(f"[WARNING] Using existing {exchange_path}", file=sys.stderr)
+        else:
+            _error(f"Exchange rate fetch failed and {exchange_path} does not exist — cannot continue")
+            return False
+    except Exception as exc:
+        print(f"[WARNING] Unexpected error during exchange rate update: {exc}", file=sys.stderr)
+        if not exchange_path.exists():
+            _error(f"Exchange rate update failed and {exchange_path} does not exist — cannot continue")
+            return False
+
+    # ------------------------------------------------------------------
+    # 更新氣候資料
+    # ------------------------------------------------------------------
+    comfort_path = data_dir / "comfort_scores.csv"
+    _info(f"Fetching climate data from JMA ({target_year})...")
+    _info("Cities: Tokyo, Osaka, Fukuoka, Sapporo, Okinawa (Naha)")
+
+    try:
+        comfort_df = fetch_comfort_scores(target_year)
+        comfort_df.to_csv(comfort_path, index=False, encoding="utf-8")
+        _done(f"Climate data written: {len(comfort_df)} records → {comfort_path}")
+    except FetchError as exc:
+        print(f"[WARNING] Climate data fetch failed: {exc}", file=sys.stderr)
+        if comfort_path.exists():
+            print(f"[WARNING] Using existing {comfort_path}", file=sys.stderr)
+        else:
+            _error(f"Climate data fetch failed and {comfort_path} does not exist — cannot continue")
+            return False
+    except Exception as exc:
+        print(f"[WARNING] Unexpected error during climate data update: {exc}", file=sys.stderr)
+        if not comfort_path.exists():
+            _error(f"Climate data update failed and {comfort_path} does not exist — cannot continue")
+            return False
+
+    # 提醒使用者 fares.csv 需手動更新
+    fares_path = data_dir / "fares.csv"
+    if fares_path.exists():
+        _info("fares.csv: manual update only — skipped (update manually as needed)")
+    else:
+        print(
+            f"[WARNING] {fares_path} not found. "
+            "Fare analysis will have no data. "
+            "Please create fares.csv manually (see README.md for format).",
+            file=sys.stderr,
+        )
+
+    return True
+
+
+def _check_existing_csvs(data_dir: Path) -> bool:
+    """
+    檢查既有 CSV 是否存在，決定是否可繼續分析。
+    當 fetcher 模組無法載入時使用。
+    """
+    required = ["exchange_rates.csv", "comfort_scores.csv"]
+    missing = [f for f in required if not (data_dir / f).exists()]
+    if missing:
+        _error(f"以下必要 CSV 不存在：{missing}，無法繼續分析")
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -99,25 +229,35 @@ def main() -> None:
         sys.exit(1)
 
     # ------------------------------------------------------------------
+    # --update-data：自動抓取上一個完整年度資料
+    # ------------------------------------------------------------------
+    if args.update_data:
+        _info("Starting data update pipeline...")
+        success = run_update_data(data_dir)
+        if not success:
+            sys.exit(1)
+        print()  # 空行分隔更新流程與分析流程
+
+    # ------------------------------------------------------------------
     # 1. 載入資料
     # ------------------------------------------------------------------
+    _info("Running analysis...")
     try:
         fare_records = load_fares(data_dir / "fares.csv")
         rate_records = load_exchange_rates(data_dir / "exchange_rates.csv")
         comfort_records = load_comfort_scores(data_dir / "comfort_scores.csv")
     except SystemExit:
-        # data_loader 已輸出 [錯誤] 訊息，直接傳遞退出碼
         raise
     except Exception as exc:
-        _error(f"資料載入失敗：{exc}")
+        _error(f"Data load failed: {exc}")
         sys.exit(1)
 
-    _done("資料載入")
+    _done("Data loaded")
 
     # ------------------------------------------------------------------
-    # 2. 資料驗證摘要（警告已由 data_loader 輸出至 stderr）
+    # 2. 資料驗證摘要
     # ------------------------------------------------------------------
-    _done("資料驗證")
+    _done("Data validated")
 
     # ------------------------------------------------------------------
     # 3. 票價分析
@@ -125,18 +265,18 @@ def main() -> None:
     try:
         fare_result = analyze_fares(fare_records)
     except Exception as exc:
-        _error(f"票價分析失敗：{exc}")
+        _error(f"Fare analysis failed: {exc}")
         sys.exit(1)
 
     fs = fare_summary(fare_result)
     if fs["cheapest_month"]:
         print(
-            f"  → 最便宜月份：{fs['cheapest_month']} 月"
-            f"（TWD {fs['cheapest_fare']:,}）"
-            f"  最貴月份：{fs['priciest_month']} 月"
-            f"（TWD {fs['priciest_fare']:,}）"
+            f"       Cheapest month: {fs['cheapest_month']} "
+            f"(TWD {fs['cheapest_fare']:,})  "
+            f"Priciest: {fs['priciest_month']} "
+            f"(TWD {fs['priciest_fare']:,})"
         )
-    _done("票價分析")
+    _done("Fare analysis complete")
 
     # ------------------------------------------------------------------
     # 4. 匯率分析
@@ -144,14 +284,14 @@ def main() -> None:
     try:
         rate_result = analyze_exchange_rates(rate_records)
     except Exception as exc:
-        _error(f"匯率分析失敗：{exc}")
+        _error(f"Exchange rate analysis failed: {exc}")
         sys.exit(1)
 
     rs = rate_summary(rate_result)
     if rs["best_months"]:
-        months_str = "、".join(f"{m} 月" for m in rs["best_months"])
-        print(f"  → 最佳換匯月份：{months_str}（全年均值 {rs['annual_avg']:.4f}）")
-    _done("匯率分析")
+        months_str = ", ".join(f"{m}" for m in rs["best_months"])
+        print(f"       Best exchange month(s): {months_str} (annual avg {rs['annual_avg']:.4f})")
+    _done("Exchange rate analysis complete")
 
     # ------------------------------------------------------------------
     # 5. 舒適度分析
@@ -159,18 +299,18 @@ def main() -> None:
     try:
         comfort_result = analyze_comfort(comfort_records)
     except Exception as exc:
-        _error(f"舒適度分析失敗：{exc}")
+        _error(f"Comfort analysis failed: {exc}")
         sys.exit(1)
 
-    _done("舒適度分析")
+    _done("Comfort analysis complete")
 
     # ------------------------------------------------------------------
-    # 6. 綜合評分（TCI）— 依城市分別計算（各城市使用自己的票價與舒適度）
+    # 6. 綜合評分（TCI）
     # ------------------------------------------------------------------
     try:
         city_scores = calculate_tci_all_cities(fare_records, rate_result, comfort_result)
     except Exception as exc:
-        _error(f"TCI 計算失敗：{exc}")
+        _error(f"TCI calculation failed: {exc}")
         sys.exit(1)
 
     for city, score_result in city_scores.items():
@@ -178,8 +318,8 @@ def main() -> None:
         if not valid_scores.empty:
             best_month = int(valid_scores.idxmax())
             best_score = float(valid_scores.max())
-            print(f"  → {city} 最佳出發月份：{best_month} 月（TCI {best_score} 分）")
-    _done("綜合評分")
+            print(f"       {city}: best month = {best_month} (TCI {best_score})")
+    _done("TCI scoring complete")
 
     # ------------------------------------------------------------------
     # 7. Dashboard 輸出
@@ -195,13 +335,12 @@ def main() -> None:
             fare_records=fare_records,
         )
     except ImportError:
-        # renderer 尚未實作（Task 7），輸出佔位訊息
         _render_placeholder(output_path)
     except Exception as exc:
-        _error(f"Dashboard 輸出失敗：{exc}")
+        _error(f"Dashboard render failed: {exc}")
         sys.exit(1)
 
-    _done("Dashboard 輸出")
+    _done(f"Dashboard generated → {output_path.resolve()}")
 
 
 # ---------------------------------------------------------------------------
@@ -213,8 +352,6 @@ def _render_placeholder(output_path: Path) -> None:
     在 src/renderer.py 實作完成前，輸出一個簡單的 HTML 佔位頁面。
     確保 main.py 可以端對端執行。
     """
-    from datetime import date
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     html = f"""<!DOCTYPE html>

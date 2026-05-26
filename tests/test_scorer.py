@@ -196,78 +196,98 @@ class TestCalculateComfortScore:
     # --- temperature_score sub-tests ---
 
     def test_temp_in_ideal_range_gets_100(self) -> None:
-        """氣溫在 10–25°C 之間，temperature_score 應為 100。"""
+        """氣溫在 18–22°C 理想區間，temperature_score 應為 100。"""
         from src.models import ComfortScoreRecord
         from src.analyzer import analyze_comfort
-        records = [ComfortScoreRecord(1, "東京", 18.0, 0, 1)]
+        records = [ComfortScoreRecord(1, "東京", 20.0, 0, 1)]
         result = analyze_comfort(records)
         scores = calculate_comfort_score(result)
         # temp=100, rain=100, crowd=100 → comfort=100.0
         assert scores[1] == pytest.approx(100.0, abs=0.2)
 
-    def test_temp_at_25_still_gets_100(self) -> None:
-        """氣溫 25°C 仍在理想區間，temperature_score 應為 100。"""
+    def test_temp_at_18_gets_100(self) -> None:
+        """氣溫 18°C（理想區間下限），temperature_score 應為 100。"""
         from src.models import ComfortScoreRecord
         from src.analyzer import analyze_comfort
-        records = [ComfortScoreRecord(6, "東京", 25.0, 0, 1)]
+        records = [ComfortScoreRecord(6, "東京", 18.0, 0, 1)]
         result = analyze_comfort(records)
         scores = calculate_comfort_score(result)
         assert scores[6] == pytest.approx(100.0, abs=0.2)
 
-    def test_temp_below_10_deducts_2_per_degree(self) -> None:
-        """氣溫 0–10°C，每降 1°C 扣 2 分。"""
+    def test_temp_at_22_gets_100(self) -> None:
+        """氣溫 22°C（理想區間上限），temperature_score 應為 100。"""
         from src.models import ComfortScoreRecord
         from src.analyzer import analyze_comfort
-        # temp=5°C → 100 - (10-5)*2 = 90
+        records = [ComfortScoreRecord(6, "東京", 22.0, 0, 1)]
+        result = analyze_comfort(records)
+        scores = calculate_comfort_score(result)
+        assert scores[6] == pytest.approx(100.0, abs=0.2)
+
+    def test_temp_below_ideal_decreases_score(self) -> None:
+        """氣溫低於 18°C 時，分數應隨溫度降低而下降（Gaussian 衰減）。"""
+        from src.models import ComfortScoreRecord
+        from src.analyzer import analyze_comfort
+        # temp=5°C → temp_score ≈ 42.96
+        # comfort = 42.96*0.4 + 100*0.3 + 100*0.3 ≈ 77.2
         records = [ComfortScoreRecord(1, "東京", 5.0, 0, 1)]
         result = analyze_comfort(records)
         scores = calculate_comfort_score(result)
-        # temp=90, rain=100, crowd=100 → 90*0.4+100*0.3+100*0.3 = 96.0
-        assert scores[1] == pytest.approx(96.0, abs=0.2)
+        assert scores[1] == pytest.approx(77.2, abs=1.0)
 
-    def test_temp_below_0_deducts_3_per_degree(self) -> None:
-        """氣溫 0°C 以下，每降 1°C 扣 3 分（累計 0–10°C 的 2 分/°C）。"""
+    def test_temp_below_0_gets_very_low_score(self) -> None:
+        """氣溫 -5°C，temperature_score 應明顯偏低（Gaussian 快速衰減）。"""
         from src.models import ComfortScoreRecord
         from src.analyzer import analyze_comfort
-        # temp=-5°C → 100 - 10*2 - 5*3 = 65
+        # temp=-5°C → temp_score ≈ 7.1
+        # comfort = 7.1*0.4 + 100*0.3 + 100*0.3 ≈ 62.8
         records = [ComfortScoreRecord(1, "札幌", -5.0, 0, 1)]
         result = analyze_comfort(records)
         scores = calculate_comfort_score(result)
-        # temp=65, rain=100, crowd=100 → 65*0.4+100*0.3+100*0.3 = 86.0
-        assert scores[1] == pytest.approx(86.0, abs=0.2)
+        assert scores[1] == pytest.approx(62.8, abs=1.0)
 
-    def test_temp_above_25_deducts_3_per_degree(self) -> None:
-        """氣溫 25–30°C，每升 1°C 扣 3 分。"""
+    def test_temp_above_ideal_decreases_score(self) -> None:
+        """氣溫高於 22°C 時，分數應隨溫度升高而下降（高溫側衰減更快）。"""
         from src.models import ComfortScoreRecord
         from src.analyzer import analyze_comfort
-        # temp=27°C → 100 - (27-25)*3 = 94
+        # temp=27°C → temp_score ≈ 77.5
+        # comfort = 77.5*0.4 + 100*0.3 + 100*0.3 ≈ 91.0
         records = [ComfortScoreRecord(6, "東京", 27.0, 0, 1)]
         result = analyze_comfort(records)
         scores = calculate_comfort_score(result)
-        # temp=94, rain=100, crowd=100 → 94*0.4+100*0.3+100*0.3 = 97.6
-        assert scores[6] == pytest.approx(97.6, abs=0.3)
+        assert scores[6] == pytest.approx(91.0, abs=1.0)
 
-    def test_temp_above_30_deducts_5_per_degree(self) -> None:
-        """氣溫 30°C 以上，每升 1°C 扣 5 分（累計 25–30°C 的 3 分/°C）。"""
+    def test_temp_above_30_gets_low_score(self) -> None:
+        """氣溫 32°C，temperature_score 應明顯偏低（高溫懲罰）。"""
         from src.models import ComfortScoreRecord
         from src.analyzer import analyze_comfort
-        # temp=32°C → 85 - (32-30)*5 = 75
+        # temp=32°C → temp_score ≈ 36.0
+        # comfort = 36.0*0.4 + 100*0.3 + 100*0.3 ≈ 74.4
         records = [ComfortScoreRecord(7, "東京", 32.0, 0, 1)]
         result = analyze_comfort(records)
         scores = calculate_comfort_score(result)
-        # temp=75, rain=100, crowd=100 → 75*0.4+100*0.3+100*0.3 = 90.0
-        assert scores[7] == pytest.approx(90.0, abs=0.3)
+        assert scores[7] == pytest.approx(74.4, abs=1.0)
 
     def test_temp_score_clipped_at_zero(self) -> None:
         """極低氣溫 temperature_score 應 clip 至 0。"""
         from src.models import ComfortScoreRecord
         from src.analyzer import analyze_comfort
-        # temp=-40°C → 100 - 20 - 40*3 = -40 → clip to 0
+        # temp=-40°C → temp_score ≈ 0 (Gaussian → 0)
         records = [ComfortScoreRecord(1, "札幌", -40.0, 0, 1)]
         result = analyze_comfort(records)
         scores = calculate_comfort_score(result)
         # temp=0, rain=100, crowd=100 → 0*0.4+100*0.3+100*0.3 = 60.0
-        assert scores[1] == pytest.approx(60.0, abs=0.2)
+        assert scores[1] == pytest.approx(60.0, abs=0.5)
+
+    def test_hot_temp_worse_than_cold_temp_at_same_distance(self) -> None:
+        """高溫側衰減比低溫側更快（非對稱 Gaussian：σ_hot=7 < σ_cold=10）。"""
+        from src.models import ComfortScoreRecord
+        from src.analyzer import analyze_comfort
+        from src.scorer import _temperature_score
+        # 偏離理想區間相同距離：低溫 18-8=10°C vs 高溫 22+10=32°C
+        # 高溫側 sigma=7 衰減更快，所以 32°C 分數應低於 8°C
+        score_cold = _temperature_score(8.0)   # 低於理想 10°C
+        score_hot  = _temperature_score(32.0)  # 高於理想 10°C
+        assert score_hot < score_cold
 
     # --- rain_score sub-tests ---
 
@@ -325,15 +345,21 @@ class TestCalculateComfortScore:
         # comfort = 100*0.4 + 100*0.3 + 40*0.3 = 82.0
         assert scores[1] == pytest.approx(82.0, abs=0.3)
 
-    def test_crowd_9_gives_crowd_score_near_7(self) -> None:
-        """crowd_index=9 → crowd_score = 40 - (9-7)²×13.3 ≈ 6.8（重度懲罰）。"""
+    def test_crowd_9_gives_crowd_score_0(self) -> None:
+        """crowd_index=9 → crowd_score = 40 - (9-7)²×13.3 = -13.2 → clip 至 0（重度懲罰）。
+
+        注意：crowd_index 是人潮擁擠程度（1=人少、10=非常擁擠），不是舒適分數。
+        crowd_score 是由 _crowd_score() 將擁擠程度轉換後的舒適度子分數（0–100）。
+        crowd=9 時公式結果為負數，clip 至 0。
+        """
         from src.models import ComfortScoreRecord
         from src.analyzer import analyze_comfort
         records = [ComfortScoreRecord(4, "東京", 18.0, 0, 9)]
         result = analyze_comfort(records)
         scores = calculate_comfort_score(result)
-        # crowd_score ≈ 6.8 → comfort = 100*0.4 + 100*0.3 + 6.8*0.3 ≈ 72.0
-        assert scores[4] == pytest.approx(72.0, abs=0.5)
+        # crowd_score = max(0, 40 - (9-7)²×13.3) = max(0, -13.2) = 0
+        # comfort = 100*0.4 + 100*0.3 + 0*0.3 = 70.0
+        assert scores[4] == pytest.approx(70.0, abs=0.2)
 
     def test_crowd_10_gives_crowd_score_0(self) -> None:
         """crowd_index=10 → crowd_score = 0（clip）。"""
@@ -540,8 +566,10 @@ class TestPerCityScoring:
         result = analyze_comfort(records)
         tokyo = calculate_comfort_score_for_city(result, "東京")[1]
         sapporo = calculate_comfort_score_for_city(result, "札幌")[1]
-        # 札幌 -3.2°C → temp_score = 100 - 20 - 3.2*3 = 70.4
-        # 東京 6.1°C → temp_score = 100 - (10-6.1)*2 = 92.2
+        # 新公式（非對稱 Gaussian）：
+        # 東京 6.1°C → temp_score ≈ 47（偏離 18°C 約 12°C，σ_cold=10）
+        # 札幌 -3.2°C → temp_score ≈ 4（偏離 18°C 約 21°C，σ_cold=10）
+        # 札幌分數應明顯低於東京
         assert sapporo < tokyo
 
     def test_tci_for_city_returns_score_result(self) -> None:
